@@ -1,0 +1,5 @@
+.cache
+.config
+.local
+cache
+node_modules

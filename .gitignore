@@ -1,0 +1,14 @@
+node_modules
+__pycache__
+pnpm-lock.yaml
+lib
+.cache
+.local
+.config
+cache
+.npm
+.node_repl_history
+.ts_node_repl_history
+typechain-types
+artifacts
+.bash_history
