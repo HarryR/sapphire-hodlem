@@ -18,7 +18,7 @@ const config: HardhatUserConfig = {
     },
   },
   typechain: {
-    target: "ethers-v5"
+    target: "ethers-v5" // TODO: upgrade to ethers-v6 when hardhat-toolbox supports it
   },
   networks: {
     hardhat: {

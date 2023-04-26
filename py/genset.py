@@ -1,10 +1,11 @@
 import itertools
 import struct
 import os
+from time import time
 from os import makedirs
 from os.path import dirname
 from hashlib import sha256
-from math import comb
+from math import comb, ceil
 
 # -------------------------------------------------------------------
 # Python Implementation of Cactus Kev's Poker Hand Evaluator
@@ -53,8 +54,8 @@ def eval7(hand):
 # -------------------------------------------------------------------
 # https://en.wikipedia.org/wiki/Combinatorial_number_system
 
-def hand_to_index(x:list[int]):
-    v = list(enumerate(sorted(x)))
+def hand_to_index(x):
+    v = tuple(enumerate(sorted(x)))
     return sum(comb(j,i+1) for i,j in v[::-1])
 
 # -------------------------------------------------------------------
@@ -65,14 +66,43 @@ makedirs(SCORES_DIR, exist_ok=True)
 
 def main():
     # map itertools.combinations to combinatorial indices
-    print('Evaluating all hands')
+    print('Evaluating all hands (a handful of seconds)')
     offsets = dict()
+    start = time()
     for hand in itertools.combinations(DECK, 5):
-        z = sorted([DECKIDX[_] for _ in hand])
+        z = sorted(DECKIDX[_] for _ in hand)
         offsets[hand_to_index(z)] = (z, eval5(hand))
+    print(' -', time() - start, 'seconds')
 
-    # Verify bijective mapping
+    # Retrieve lowest score for each two pairs
+    print('Calculating pre-flop odds (a few minutes)')
+    start = time()
+    preflop = dict()
+    max_i = comb(52,2)
+    for i,(h0,h1) in enumerate(itertools.combinations(DECKIDX.values(), 2)):
+        la, lb, lc, ld = 0, 0, 0xFFFFFF, 0
+        for z, s in offsets.values():
+            if h0 in z and h1 in z:
+                if s < lc:
+                    lc = s
+                if s > ld:
+                    ld = s
+                la += s
+                lb += 1
+        preflop[hand_to_index((h0,h1))] = lc, ld, ceil(la / lb), h0, h1
+        #print('%2d' % (h0,), '%2d' % (h1,), '%4d' % (lc,), '%4d' % (ld,), ceil(la / lb), '%02d%%' % ((i/max_i)*100,))  # Average pre-flop score
+    assert len(preflop) == max_i
+    print(' -', time() - start, 'seconds')
+    print(" - avg min:", min(_[2] for _ in preflop.values()), 'max:', max(_[2] for _ in preflop.values()))
+    print(" - best min:", min(_[0] for _ in preflop.values()), 'max:', max(_[0] for _ in preflop.values()))
+    print(" - worst min:", min(_[1] for _ in preflop.values()), 'max:', max(_[1] for _ in preflop.values()))
+    with open(os.path.join(SCORES_DIR, 'scores.preflop'), 'wb') as handle:
+        for k in sorted(preflop.keys()):
+            a,b,c,d,e = preflop[k]
+            handle.write(bytes([d,e]) + struct.pack('<H',a) + struct.pack('<H',b) + struct.pack('<H',c))
+
     """
+    # Verify bijective mapping
     print('Verifying hand scoring')
     i = 0
     for hand in itertools.combinations(DECK, 5):
@@ -87,21 +117,25 @@ def main():
 
     # Compact encoding of hands and their scores
     print('Hashing leaf level')
+    start = time()
     merkle_level = list()
     with open(os.path.join(SCORES_DIR, 'scores.leaf'), 'wb') as handle:
         for k in sorted(offsets.keys()):
             z, score = offsets[k]
+            # XXX: we don't need to write the score, it's only used to verify the hand matche
             entry = bytes(z) + struct.pack('<H', score)
             merkle_level.append(sha256(entry).digest())
             handle.write(entry)
+    print(' -', time() - start, 'seconds')
 
     # Populate merkle tree
+    start = time()
     widths = []
     level = 0
     while len(merkle_level) != 1:
         next_level = list()
         widths.append(len(merkle_level))
-        with open(os.path.join(SCORES_DIR, f'scores.{level:02d}'), 'wb') as tree:
+        with open(os.path.join(SCORES_DIR, 'scores.%02d' % (level,)), 'wb') as tree:
             for i in range(0, len(merkle_level), 2):
                 if i + 1 >= len(merkle_level):
                     p, n = merkle_level[i], bytes([level] * 32)   # Fill unbalanced tree edges with known values
@@ -110,13 +144,14 @@ def main():
                 x = sha256(p + n).digest()
                 next_level.append(x)
                 tree.write(x)
-        print(f'Hashed level {level}: {len(merkle_level)}')
+        print('Hashed level', level, len(merkle_level))
         level += 1
         merkle_level = next_level
         next_level = list()
 
-    with open(os.path.join(SCORES_DIR, f'scores.root'), 'wb') as tree:
+    with open(os.path.join(SCORES_DIR, 'scores.root'), 'wb') as tree:
         tree.write(merkle_level[0])
+    print(' -', time() - start, 'seconds')
 
 if __name__ == "__main__":
     main()

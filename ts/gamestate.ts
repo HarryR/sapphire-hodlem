@@ -229,8 +229,6 @@ export class GameState extends Exome {
 
     public step( e:GameEvent )
     {
-        //console.log(`Step (game=${this.game_id.toString()})`, e);
-
         if( e.event_type == "bet" ) {
             const bet = (e as GameEventBet).bet;
             const ps = this.player_states[bet.player_idx];
@@ -248,12 +246,9 @@ export class GameState extends Exome {
         else if( e.event_type == "round" ) {
             const round = (e as GameEventRound).round;
             this.dealer_cards = (this.dealer_cards ?? []).concat(round.cards);
-            if( ! this.my_hand ) {
-                throw Error("Don't have 5 cards after the flop, what happened!");
-            }
             this.my_best_hands = [];
-            for( const _ of this.st.lookup_hands(this.dealer_cards.concat(this.my_hand)) ) {
-                this.my_best_hands.push(_);
+            if( this.my_hand ) {
+                this.my_best_hands = this.st.lookup_hands(this.dealer_cards.concat(this.my_hand));
             }
             this.player_next_idx = round.player_next_idx;
             this.round = round.round_idx;

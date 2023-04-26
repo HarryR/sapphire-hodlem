@@ -4,17 +4,16 @@ import { join } from "path";
 import { binomialCoefficient, combinations } from "./utils";
 
 const LEAF_SIZE_BYTES = 7;
-const NODE_SIZE_BYTES = 32;
 
+const PREFLOP_SIZE_BYTES = 8;
+
+const NODE_SIZE_BYTES = 32;
 
 export type Card = '2c' | '2d' | '2h' | '2s' | '3c' | '3d' | '3h' | '3s' | '4c' | '4d' | '4h' | '4s' | '5c' | '5d' | '5h' | '5s' | '6c' | '6d' | '6h' | '6s' | '7c' | '7d' | '7h' | '7s' | '8c' | '8d' | '8h' | '8s' | '9c' | '9d' | '9h' | '9s' | 'Tc' | 'Td' | 'Th' | 'Ts' | 'Jc' | 'Jd' | 'Jh' | 'Js' | 'Qc' | 'Qd' | 'Qh' | 'Qs' | 'Kc' | 'Kd' | 'Kh' | 'Ks' | 'Ac' | 'Ad' | 'Ah' | 'As';
 
 export const DECK:Card[] = ['2c', '2d', '2h', '2s', '3c', '3d', '3h', '3s', '4c', '4d', '4h', '4s', '5c', '5d', '5h', '5s', '6c', '6d', '6h', '6s', '7c', '7d', '7h', '7s', '8c', '8d', '8h', '8s', '9c', '9d', '9h', '9s', 'Tc', 'Td', 'Th', 'Ts', 'Jc', 'Jd', 'Jh', 'Js', 'Qc', 'Qd', 'Qh', 'Qs', 'Kc', 'Kd', 'Kh', 'Ks', 'Ac', 'Ad', 'Ah', 'As'];
 
 export const DECKIDX : {[id:string]:number}= {'2c': 0, '2d': 1, '2h': 2, '2s': 3, '3c': 4, '3d': 5, '3h': 6, '3s': 7, '4c': 8, '4d': 9, '4h': 10, '4s': 11, '5c': 12, '5d': 13, '5h': 14, '5s': 15, '6c': 16, '6d': 17, '6h': 18, '6s': 19, '7c': 20, '7d': 21, '7h': 22, '7s': 23, '8c': 24, '8d': 25, '8h': 26, '8s': 27, '9c': 28, '9d': 29, '9h': 30, '9s': 31, 'Tc': 32, 'Td': 33, 'Th': 34, 'Ts': 35, 'Jc': 36, 'Jd': 37, 'Jh': 38, 'Js': 39, 'Qc': 40, 'Qd': 41, 'Qh': 42, 'Qs': 43, 'Kc': 44, 'Kd': 45, 'Kh': 46, 'Ks': 47, 'Ac': 48, 'Ad': 49, 'Ah': 50, 'As': 51};
-
-const LOOKUP : {[id:string]:number} = {'2c': 69634, '2d': 73730, '2h': 81922, '2s': 98306, '3c': 135427, '3d': 139523, '3h': 147715, '3s': 164099, '4c': 266757, '4d': 270853, '4h': 279045, '4s': 295429, '5c': 529159, '5d': 533255, '5h': 541447, '5s': 557831, '6c': 1053707, '6d': 1057803, '6h': 1065995, '6s': 1082379, '7c': 2102541, '7d': 2106637, '7h': 2114829, '7s': 2131213, '8c': 4199953, '8d': 4204049, '8h': 4212241, '8s': 4228625, '9c': 8394515, '9d': 8398611, '9h': 8406803, '9s': 8423187, 'Tc': 16783383, 'Td': 16787479, 'Th': 16795671, 'Ts': 16812055, 'Jc': 33560861, 'Jd': 33564957, 'Jh': 33573149, 'Js': 33589533, 'Qc': 67115551, 'Qd': 67119647, 'Qh': 67127839, 'Qs': 67144223, 'Kc': 134224677, 'Kd': 134228773, 'Kh': 134236965, 'Ks': 134253349, 'Ac': 268442665, 'Ad': 268446761, 'Ah': 268454953, 'As': 268471337};
-
 
 export type ScoreName = 'HIGH_CARD'
                       | 'ONE_PAIR'
@@ -41,12 +40,10 @@ export function score_name(score:number) : ScoreName {
     return 'ROYAL_FLUSH';                        // 1 royal-flushes
 };
 
-// -------------------------------------------------------------------
 // https://en.wikipedia.org/wiki/Combinatorial_number_system
-
 export function hand_to_index(hand:Card[]) {
-    if( hand.length != 5 ) {
-        throw Error(`Requires 5 cards, but provided with: ${hand} (${hand.length})`);
+    if( hand.length != 2 && hand.length != 5 ) {
+        throw Error(`Requires 5 cards, but provided with ${hand.length}: ${hand}`);
     }
     let v:[number,number][] = [];
     let i = 0;
@@ -58,9 +55,46 @@ export function hand_to_index(hand:Card[]) {
 }
 
 export function hand_sort(hand:Card[]) {
-    return hand.map((_)=>DECKIDX[_]).sort((a,b) => a-b).map((_)=>DECK[_]);
+    const sorted_hand = hand.map((_)=>DECKIDX[_]).sort((a,b) => a-b).map((_)=>DECK[_]);
+    return sorted_hand;
 }
 
+export interface PreflopLeaf {
+    idx:number;
+    hand: Card[];
+    avg: number;
+    avg_kind: ScoreName;
+    best: number;
+    best_kind: ScoreName;
+    worst: number;
+    worst_kind: ScoreName;
+}
+
+function load_u16(data:Uint8Array, offset:number) {
+    return data[offset] + (data[offset+1]<<8)
+}
+
+function Preflop_from_bytes(entry:Uint8Array, idx:number) : PreflopLeaf {
+    const a = load_u16(entry, 2);
+    const b = load_u16(entry, 4);
+    const c = load_u16(entry, 6);
+    return {
+        idx: idx,
+        hand: [DECK[entry[0]], DECK[entry[1]]],
+        avg: a,
+        avg_kind: score_name(a),
+        best: b,
+        best_kind: score_name(b),
+        worst: c,
+        worst_kind: score_name(c)
+    };
+}
+
+function Preflop_load(preflop_data:Uint8Array, idx:number) {
+    const offset = idx * PREFLOP_SIZE_BYTES;
+    const entry = preflop_data.slice(offset, offset + PREFLOP_SIZE_BYTES);
+    return Preflop_from_bytes(entry, idx);
+}
 
 export interface ScoreLeaf {
     idx: number;
@@ -78,17 +112,13 @@ function hash_node(lvl:number, idx:number, self_hash: Uint8Array, other_hash: Ui
     return Buffer.from(sha256(leaf));
 }
 
-function Leaf_load(leaf_data: Uint8Array, idx: number) : ScoreLeaf
+function ScoreLeaf_from_bytes(idx:number, leaf:Uint8Array) : ScoreLeaf
 {
-    const leaf_count = leaf_data.length / LEAF_SIZE_BYTES;
-    if( idx >= leaf_count ) {
-        throw Error(`Index ${idx} exceeds leaf count ${leaf_count}`);
+    if( leaf.length != LEAF_SIZE_BYTES ) {
+        throw Error('Invalid leaf size!');
     }
-    const offset = idx * LEAF_SIZE_BYTES;
-    const leaf = leaf_data.slice(offset, offset+LEAF_SIZE_BYTES);
-    // 8 bytes, 5 bytes of hand, 0 byte, 16 bit little-endian score
     const hand = [DECK[leaf[0]], DECK[leaf[1]], DECK[leaf[2]], DECK[leaf[3]], DECK[leaf[4]]];
-    const score = leaf[5] + (leaf[6]<<8);
+    const score = load_u16(leaf, 5);
     return {
         idx: idx,
         hand: hand_sort(hand),
@@ -99,10 +129,22 @@ function Leaf_load(leaf_data: Uint8Array, idx: number) : ScoreLeaf
     }
 }
 
+function ScoreLeaf_load(leaf_data: Uint8Array, idx: number)
+{
+    const leaf_count = leaf_data.length / LEAF_SIZE_BYTES;
+    if( idx >= leaf_count ) {
+        throw Error(`Index ${idx} exceeds leaf count ${leaf_count}`);
+    }
+    const offset = idx * LEAF_SIZE_BYTES;
+    const leaf = leaf_data.slice(offset, offset+LEAF_SIZE_BYTES);
+    return ScoreLeaf_from_bytes(idx, leaf);
+}
+
 export class ScoreTree {
     private levels_data: Uint8Array[];
     private leaf_data: Uint8Array;
-    private root: Uint8Array;
+    public root: Uint8Array;
+    private preflop_data: Uint8Array;
     constructor(
         private base_path:string
     ) {
@@ -113,6 +155,7 @@ export class ScoreTree {
         }
         this.leaf_data = this._load_file('scores.leaf');
         this.root = this._load_file('scores.root');
+        this.preflop_data = this._load_file('scores.preflop');
     }
 
     public _load_file(filename:string) {
@@ -130,10 +173,22 @@ export class ScoreTree {
         return data;
     }
 
-    public * lookup_hands(hand:Card[]) {
+    public lookup_preflop(hole:Card[]) {
+        const idx = hand_to_index(hole);
+        const data = this.preflop_data.slice();
+        return Preflop_load(this.preflop_data, idx);
+    }
+
+    public lookup_hands(hand:Card[]) {
+        let ret = [];
         for( const h of combinations<Card>(hand, 5) ) {
-            yield this.lookup_hand(h);
+            ret.push(this.lookup_hand(h));
         }
+        return ret;
+    }
+
+    public hands_count() {
+        return this.leaf_data.length / LEAF_SIZE_BYTES;
     }
 
     public lookup_hand(hand:Card[]) {
@@ -150,7 +205,7 @@ export class ScoreTree {
     }
 
     public lookup_idx(idx:number) {
-        return Leaf_load(this.leaf_data, idx);
+        return ScoreLeaf_load(this.leaf_data, idx);
     }
 
     public proof(hand:Card[])
