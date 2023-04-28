@@ -1,16 +1,34 @@
 import { Card, DECK, ScoreLeaf, ScoreTree } from "./scoretree";
 import { Exome } from "exome";
 import { ContractReceipt } from "ethers";
+import * as Poker from "../typechain-types/Poker";
 
-export type GameEventName = 'created' | 'bet' | 'hand' | 'round' | 'win';
+// ------------------------------------------------------------------
+// Game Events
+
+export type GameEventName = 'created' | 'bet' | 'hand' | 'round' | 'win' | 'end';
 
 const NO_NEXT_PLAYER = 0xFF;
 
 const NO_CARD = 0xFF;
 
+export type QueueEventType = 'queue_join' | 'queue_leave';
+
+export interface QueueEvent {
+    player: string;
+    qid: number;
+    bet_size: bigint;
+    max_bet_mul: number;
+    event_type: QueueEventType;
+}
+
 interface _GameEventBase {
     game_id: bigint;
     event_type: GameEventName;
+}
+
+export interface GameEventEnd extends _GameEventBase {
+
 }
 
 export interface GameEventBet extends _GameEventBase {
@@ -58,9 +76,13 @@ export type GameEvent = GameEventBet
                       | GameEventCreated
                       | GameEventHand
                       | GameEventRound
-                      | GameEventWin;
+                      | GameEventWin
+                      | GameEventEnd;
+
+export type GameOrQueueEvent = GameEvent | QueueEvent;
 
 // ------------------------------------------------------------------
+// Decoding game events from contract logs
 
 function event_cards_decode(cards: string[]) : Card[] {
     const r : Card[] = [];
@@ -75,35 +97,37 @@ function event_cards_decode(cards: string[]) : Card[] {
     return r;
 }
 
-export function receipt_to_events(receipt:ContractReceipt) : GameEvent[]
+export function receipt_to_events(receipt:ContractReceipt) : GameOrQueueEvent[]
 {
     if( ! receipt.events ) {
         throw Error(`Receipt has no events! ${receipt}`);
     }
 
-    const r : GameEvent[] = [];
+    const r : GameOrQueueEvent[] = [];
     for( const e of receipt.events ) {
         if( ! e.event || ! e.args ) {
             throw Error(`Event was not decoded! ${e}`);
         }
 
         if( e.event == 'Created' ) {
+            const ta = e as Poker.CreatedEvent;
             r.push({
-                game_id: e.args.game_id,
+                game_id: ta.args.game_id.toBigInt(),
                 event_type: "created",
                 created: {
-                    players: e.args.players,
-                    bet_size: e.args.bet_size,
-                    max_bet_mul: e.args.max_bet_mul,
-                    player_start_idx: e.args.player_start_idx,
-                    pot: e.args.pot
+                    players: ta.args.players.filter((_)=>_!='0x0000000000000000000000000000000000000000'),
+                    bet_size: ta.args.bet_size.toBigInt(),
+                    max_bet_mul: ta.args.max_bet_mul.toNumber(),
+                    player_start_idx: ta.args.player_start_idx,
+                    pot: e.args.pot.toBigInt()
                 }
             } as GameEventCreated);
         }
         else if( e.event == 'Hand' ) {
             // e.args.cards is array of bytes, as hex encoded strings, decode to actual cards
+            const ta = e as Poker.HandEvent;
             r.push({
-                game_id: e.args.game_id,
+                game_id: e.args.game_id.toBigInt(),
                 event_type: "hand",
                 hand: {
                     player_idx: e.args.player_idx,
@@ -112,37 +136,57 @@ export function receipt_to_events(receipt:ContractReceipt) : GameEvent[]
             } as GameEventHand);
         }
         else if( e.event == 'Round' ) {
+            const ta = e as Poker.RoundEvent;
             r.push({
-                game_id: e.args.game_id,
+                game_id: ta.args.game_id.toBigInt(),
                 event_type: "round",
                 round: {
-                    round_idx: e.args.round_idx,
-                    cards: event_cards_decode(e.args.cards),
-                    player_next_idx: e.args.player_next_idx
+                    round_idx: ta.args.round_idx,
+                    cards: event_cards_decode(ta.args.cards),
+                    player_next_idx: ta.args.player_next_idx
                 }
             } as GameEventRound);
         }
         else if( e.event == 'Bet' ) {
+            const ta = e as Poker.BetEvent;
             r.push({
-                game_id: e.args.game_id,
+                game_id: ta.args.game_id.toBigInt(),
                 event_type: "bet",
                 bet: {
-                    player_idx: e.args.player_idx,
-                    multiplier: e.args.multiplier,
-                    pot: e.args.pot,
-                    player_next_idx: e.args.player_next_idx
+                    player_idx: ta.args.player_idx,
+                    multiplier: ta.args.multiplier,
+                    pot: ta.args.pot.toBigInt(),
+                    player_next_idx: ta.args.player_next_idx
                 }
             } as GameEventBet);
         }
         else if( e.event == 'Win' ) {
+            const ta = e as Poker.WinEvent;
             r.push({
-                game_id: e.args.game_id,
+                game_id: ta.args.game_id.toBigInt(),
                 event_type: "win",
                 win: {
-                    player_idx: e.args.player_idx,
-                    payout: e.args.payout
+                    player_idx: ta.args.player_idx,
+                    payout: ta.args.payout.toBigInt()
                 }
             } as GameEventWin);
+        }
+        else if( e.event == 'End' ) {
+            const ta = e as Poker.EndEvent;
+            r.push({
+                game_id: ta.args.game_id.toBigInt(),
+                event_type: "end",
+            } as GameEventEnd);
+        }
+        else if( e.event == 'Queue_Join' || e.event == 'Queue_Leave' ) {
+            const ta = e as Poker.Queue_JoinEvent;
+            r.push({
+                player: ta.args.player,
+                qid: ta.args.qid.toNumber(),
+                bet_size: ta.args.bet_size.toBigInt(),
+                max_bet_mul: ta.args.max_bet_mul.toNumber(),
+                event_type: e.event.toLowerCase()
+            } as QueueEvent);
         }
         else {
             throw Error(`Unknown event type: ${e}`);
@@ -195,10 +239,6 @@ export class GameState extends Exome {
             return new PlayerState(index, false, _, 0);
         });
         this.round = 0;
-    }
-
-    static from_receipt(st: ScoreTree, receipt:ContractReceipt, my_address: string) {
-        return GameState.from_events(st, receipt_to_events(receipt), my_address);
     }
 
     static from_events( st: ScoreTree, events: GameEvent[], my_address: string ) {
@@ -266,13 +306,97 @@ export class GameState extends Exome {
             ps.payout = win.payout;
         }
         else {
-            throw Error(`Unhandled event type (${e.game_id} - ${e.event_type}): ${e}`);
+            throw Error(`Unhandled event type (${e.event_type}): ${e}`);
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// Manages the lobby, joining and leaving games.
+
+class GamePreset extends Exome {
+    constructor(
+        public preset_id: number,
+        public bet_size: bigint,
+        public max_bet_mul: number,
+        public joined: boolean
+    ) {
+        super();
+    }
+}
+
+export class LobbyState extends Exome {
+    declare public queues: Map<number,GamePreset>;
+    declare public games: Map<bigint,GameState>;
+    declare public results: Map<bigint,GameState>;
+    declare public balance: bigint | null;
+    declare public game_ids: bigint[];
+    constructor(
+        private st: ScoreTree,
+        _presets:GamePreset[],
+        public my_addr:string
+    ) {
+        super();
+        this.queues = new Map();
+        this.games = new Map();
+        this.results = new Map();
+        this.game_ids = [];
+        this.balance = null;
+    }
+
+    public step_from_receipt( r:ContractReceipt )
+    {
+        for( const e of receipt_to_events(r) ) {
+            this.step(e);
         }
     }
 
-    public step_from_receipt( receipt:ContractReceipt ) {
-        for( const e of receipt_to_events(receipt) ) {
-            this.step(e);
+    public step( e:GameOrQueueEvent )
+    {
+        if( e.event_type == "queue_join" || e.event_type == "queue_leave") {
+            const qe = e as QueueEvent;
+            if( qe.player == this.my_addr ) {
+                const q = this.queues.get(e.qid);
+                if( ! q ) {
+                    this.queues.set(e.qid, new GamePreset(e.qid, e.bet_size, e.max_bet_mul, true));
+                }
+                else {
+                    q.joined = (e.event_type == "queue_join");
+                }
+            }
+        }
+        else if( e.event_type == "created" ) {
+            const ge = e as GameEventCreated;
+            const my_idx = ge.created.players.indexOf(this.my_addr);
+            if( my_idx != -1 ) {
+                if( ! this.games.has(e.game_id) ) {
+                    const gs = new GameState(this.st, e.game_id, ge.created, my_idx);
+                    this.games.set(e.game_id, gs);
+                    this.game_ids.push(e.game_id);
+                }
+                else {
+                    console.error(`Processing Created event twice! game_id: ${e.game_id}`, e);
+                }
+            }
+        }
+        else if( e.event_type == "end" ) {
+            const ge = e as GameEventEnd;
+            const gs = this.games.get(ge.game_id);
+            if( gs ) {
+                this.game_ids = this.game_ids.filter(_ => _ != ge.game_id);
+                this.games.delete(ge.game_id);
+                this.results.set(ge.game_id, gs);
+            }
+        }
+        else {
+            const ge = e as GameEvent;
+            const game = this.games.get(ge.game_id);
+            if( game ) {
+                game.step(ge);
+            }
+            else {
+                console.error(`Unknown game ID ${ge.game_id} - cannot process event`, e)
+            }
         }
     }
 }
