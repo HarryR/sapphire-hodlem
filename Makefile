@@ -33,7 +33,7 @@ cache/%.docker: Dockerfile.% cache
 	docker image inspect "${REPO}/$*" > $@
 
 clean:
-	rm -rf artifacts cache node_modules typechain-types .bash_history .cache .local lib
+	rm -rf artifacts cache node_modules typechain-types .bash_history .cache .local lib coverage coverage.json
 
 .PHONY:
 %-shell: cache/%.docker

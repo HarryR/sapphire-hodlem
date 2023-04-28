@@ -2,12 +2,25 @@ import { expect } from "chai";
 import { readFileSync } from "fs";
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
 import * as hre from "hardhat";
-import { GameState, LobbyState, } from "../../ts/gamestate";
+import { LobbyState, } from "../../ts/gamestate";
 import { DECKIDX, ScoreTree } from "../../ts/scoretree";
-import { BigNumber, BytesLike } from "ethers";
-import { Poker } from "../../typechain-types";
+import { BytesLike } from "ethers";
 
 const ethers = hre.ethers;
+
+function randint(min: number, max: number): number {
+    return Math.floor(Math.random() * (max - min) + min);
+}
+
+function random_bet(fold_chance:number, min: number, max: number)
+{
+    const m = randint(0, fold_chance);
+    if( m == 0 ) {
+        return ['fold', 0];
+    }
+    const n = randint(Math.max(1, min), max);
+    return [`bet ${n}`, n];
+}
 
 const MERKLE_ROOT = readFileSync('./cache/scores/scores.root');
 
@@ -51,7 +64,7 @@ describe('Poker', () => {
             console.log('--------------------------------------------');
             console.log("PLAYER COUNT", player_count);
             // Begin a poker game with the players
-            for( let game_count = 0; game_count < 2; game_count++ ) {
+            for( let game_count = 0; game_count < 5; game_count++ ) {
                 console.log("GAME COUNT", game_count);
                 console.log('.......................');
                 let total_log_bytes = 0;
@@ -93,12 +106,13 @@ describe('Poker', () => {
 
                 const empty_proof_data : [BytesLike, number, BytesLike[], number] = [[], 0, [], 0];
                 let game_running = true;
+                let fold_count = 0;
                 while( game_running )
                 {
                     for( const pa of game_accounts ) {
                         const game = pa.lobby.games.get(game_id);
                         if( ! game ) {
-                            throw Error("Account doesn't have game associated with it!");
+                            throw Error(`Account ${pa.address} doesn't have game associated with it!`);
                         }
 
                         if( game.my_idx != game.player_next_idx ) {
@@ -119,12 +133,16 @@ describe('Poker', () => {
                         }
 
                         const p = {hand: my_proof[0], score: my_proof[1], path: my_proof[2], index: my_proof[3]};
-                        let p1 = await pa.contract.play(game.game_id, game.player_next_idx, 1, p);
+                        const [bet_kind, bet_size] = random_bet(5, game.min_bet_mul, game.info.max_bet_mul);
+                        let p1 = await pa.contract.play(game.game_id, game.player_next_idx, bet_size, p);
                         let p2 = await p1.wait();
                         total_log_bytes = total_log_bytes + p2.logs.map((_)=>_.data.length-2).reduce((a, b) => a + b, 0);
                         total_gas_used += p2.gasUsed.toBigInt();
+                        if( bet_kind == 'fold' ) {
+                            fold_count += 1;
+                        }
 
-                        console.log(`   Round ${game.round}/${game.my_idx}/${game.player_next_idx}, player ${pa.address}, gc=${p2.gasUsed}`);
+                        console.log(`   Round ${game.round}/${game.my_idx}/${game.player_next_idx}, player ${pa.address}, ${bet_kind} gc=${p2.gasUsed}`);
 
                         // Notify other accounts of this games actions
                         for( const pa2 of game_accounts ) {
@@ -138,6 +156,8 @@ describe('Poker', () => {
                     }
                 }
 
+                // TODO: verify that there is at least one winner
+
                 console.log("")
                 console.log("Total gas used:", total_gas_used.toString())
                 console.log("Total log bytes:", total_log_bytes.toString())
@@ -146,13 +166,17 @@ describe('Poker', () => {
                 for( const pa of game_accounts ) {
                     const gs = pa.lobby.results.get(game_id);
                     expect(gs).to.not.be.undefined;
-                    console.log(pa.address, gs?.my_result);
+                    if( ! gs ) throw Error("Game state must not be undefined");
+                    const folded = gs.has_folded;
+                    console.log(pa.address, `folded=${folded}`, gs?.my_result);
+                    expect(gs.my_result).to.not.be.undefined;
+                    if( folded ) {
+                        expect(gs.my_result?.payout).to.equal(0n);
+                    }
                 }
                 console.log("\n");
             }
         }
-
-        expect(true).to.be.eq(true);
     });
 });
 

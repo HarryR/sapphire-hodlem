@@ -1,6 +1,8 @@
 node_modules
 __pycache__
 pnpm-lock.yaml
+coverage
+coverage.json
 lib
 .cache
 .local

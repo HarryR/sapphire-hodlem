@@ -223,8 +223,10 @@ export class GameState extends Exome {
     declare public my_best_hands? : ScoreLeaf[];
     declare public player_next_idx : number;
     declare public player_states : PlayerState[];
+    declare public min_bet_mul : number;
     declare public pot: bigint;
     declare public round: number;
+    declare public has_folded: boolean;
 
     constructor(
         private st: ScoreTree,
@@ -239,6 +241,8 @@ export class GameState extends Exome {
             return new PlayerState(index, false, _, 0);
         });
         this.round = 0;
+        this.min_bet_mul = 0;
+        this.has_folded = false;
     }
 
     static from_events( st: ScoreTree, events: GameEvent[], my_address: string ) {
@@ -276,6 +280,10 @@ export class GameState extends Exome {
             ps.bets += bet.multiplier;
             this.pot = bet.pot;
             this.player_next_idx = bet.player_next_idx;
+            this.min_bet_mul = bet.multiplier;
+            if( bet.player_idx == this.my_idx ) {
+                this.has_folded = ps.folded;
+            }
         }
         else if( e.event_type == "hand" ) {
             const hand = (e as GameEventHand).hand;
@@ -292,6 +300,7 @@ export class GameState extends Exome {
             }
             this.player_next_idx = round.player_next_idx;
             this.round = round.round_idx;
+            this.min_bet_mul = 0;
         }
         else if( e.event_type == "win" ) {
             const win = (e as GameEventWin).win;

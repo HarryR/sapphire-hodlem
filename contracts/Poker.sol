@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import "hardhat/console.sol";
-
 // ------------------------------------------------------------------
 // Utilities for handling uint256 as a packed byte array
 
@@ -191,9 +189,6 @@ contract Poker {
 
     uint256 private g_game_counter;
 
-    // Keeps payout rounding errors
-    uint256 private g_dust;
-
     mapping(uint => Table) private g_tables;
 
     bytes32 immutable g_scoring_merkle_root;
@@ -280,20 +275,6 @@ contract Poker {
 
 // ------------------------------------------------------------------
 // Account balance utilities
-
-    // Dust cannot get trapped, but we don't care who harvests it
-    function withdraw_dust()
-        external
-    {
-        uint256 d = g_dust;
-
-        if( d > 0 )
-        {
-            g_dust = 0;
-
-            payable(msg.sender).transfer(d);
-        }
-    }
 
     function deposit(address to)
         external payable
@@ -640,6 +621,8 @@ contract Poker {
         }
 
         delete g_tables[game_id];
+
+        emit End(game_id);
     }
 
     function _merkle_verify( bytes32 root, bytes32 leaf_hash, bytes32[] calldata path, uint256 index )
@@ -679,9 +662,11 @@ contract Poker {
         Table storage t = g_tables[game_id];
         uint bet_size = t.bet_size;
         require( bet_size != 0 );
+
+        // Ensure correct game state
         require( t.state_player == player_idx );
-        require( bet >= t.state_bet );
-        require( bet <= t.max_bet_mul );
+        require( bet == 0 || bet >= t.state_bet );  // Fold or meet minimum round bet size
+        require( bet <= t.max_bet_mul );            // Do not exceed maximum bet
 
         // Load players into memory, rather than accessing storage every time
         TablePlayer[] memory players;
@@ -746,6 +731,7 @@ contract Poker {
         }
 
         // Subtract bet from balance, or force to fold if insufficient balance
+        if( bet_size != 0 )
         {
             uint256 bet_amount = bet_size * bet;
 
@@ -780,16 +766,7 @@ contract Poker {
             {
                 emit Bet(game_id, player_idx, bet, table_pot, NO_NEXT_PLAYER);
 
-                uint winning_player_idx = _next_player_idx(players, 0);
-
-                require( winning_player_idx != NO_NEXT_PLAYER );
-
-                // TODO: emit Win events for all players, in same way normal Win does, GameState uses this as notification of game end!
-                emit Win(game_id, uint8(winning_player_idx), table_pot);
-
-                emit End(game_id);
-
-                g_balances[players[winning_player_idx].addr] += table_pot;
+                _perform_round3(game_id, table_pot, players);
 
                 _delete_game(game_id, t, players.length);
 
@@ -826,7 +803,6 @@ contract Poker {
             else if( 3 == round ) {
                 _perform_round3(game_id, table_pot, players);
                 _delete_game(game_id, t, players.length);
-                emit End(game_id);
                 return;
             }
 
@@ -846,19 +822,19 @@ contract Poker {
 
         for( uint i = 0; i < payouts.length; i++ )
         {
-            uint256 po = payouts[i];
+            uint256 po = payouts[i] + dust;
+
+            dust = 0;
 
             emit Win(game_id, uint8(i), po);
 
             // All balances are modified to prevent on-chain analysis of winners
             g_balances[player_addresses[i]] += po;
         }
-
-        g_dust += dust;
     }
 
     function _winners(TablePlayer[] memory players, uint256 pot)
-        private pure
+        private view
         returns (
             address[] memory player_addresses,
             uint256[] memory payouts,
@@ -877,6 +853,11 @@ contract Poker {
             for( uint i = 0; i < players_length; i++ )
             {
                 TablePlayer memory x = players[i];
+
+                if( x.folded ) {
+                    continue;
+                }
+
                 uint x_score = x.score;
 
                 if( x_score < lowest_score ) {
