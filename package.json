@@ -38,6 +38,7 @@
   "dependencies": {
     "@ethersproject/providers": "^5.7.2",
     "@noble/hashes": "1.1.2",
+    "@oasisprotocol/sapphire-paratime": "^1.0.15",
     "ethers": "^5.7.2",
     "exome": "^1.5.5"
   }

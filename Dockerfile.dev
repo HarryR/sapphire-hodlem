@@ -2,7 +2,7 @@ FROM node:lts
 
 RUN npm install -g pnpm
 
-RUN pnpm add -g pnpm
+#RUN pnpm add -g pnpm
 
 WORKDIR /src
 

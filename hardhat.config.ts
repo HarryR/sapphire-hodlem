@@ -7,6 +7,9 @@ import 'solidity-coverage'
 const env_private_key = process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [];
 
 const config: HardhatUserConfig = {
+  mocha: {
+    timeout: 400000
+  },
   paths: {
     tests: "./tests/hardhat"
   },
@@ -14,6 +17,11 @@ const config: HardhatUserConfig = {
     version: "0.8.18",
     settings: {
       viaIR: false,
+      /*
+      debug: {
+        revertStrings: "debug"
+      },
+      */
       optimizer: {
           enabled: true,
           runs: 200,
@@ -29,7 +37,14 @@ const config: HardhatUserConfig = {
     },
     sapphire_local: {
       url: "http://localhost:8545",
-      accounts: env_private_key,
+      //accounts: env_private_key,
+      accounts: {
+        mnemonic: "test test test test test test test test test test test junk",
+        path: "m/44'/60'/0'/0",
+        initialIndex: 0,
+        count: 20,
+        passphrase: "",
+      },
       chainId: 0x5afd,
     },
     // https://docs.oasis.io/dapp/sapphire/

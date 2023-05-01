@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.18;
+// SPDX-License-Identifier: AGPL-3
+pragma solidity ^0.8.0;
 
 // ------------------------------------------------------------------
 // Utilities for handling uint256 as a packed byte array
@@ -79,22 +79,26 @@ contract Poker {
 // ------------------------------------------------------------------
 // Constants
 
-    uint8 private constant MAX_BET_MULTIPLIER = 3;
+    uint internal constant SCORE_BITMASK = 0xFFFF;
 
-    uint8 private constant CARDS_PER_DECK = 52;
+    uint8 internal constant MAX_BET_MULTIPLIER = 3;
 
-    uint private constant CARDS_PER_PLAYER = 2;
+    uint internal constant FORCE_FOLD_AFTER_N_SECONDS = 360;
 
-    uint private constant CARDS_PER_DEALER = 5;
+    uint8 internal constant CARDS_PER_DECK = 52;
 
-    //uint private constant MAX_PLAYERS = (CARDS_PER_DECK-CARDS_PER_DEALER-1) / CARDS_PER_PLAYER;
-    uint private constant MAX_PLAYERS = 5;
+    uint internal constant CARDS_PER_PLAYER = 2;
 
-    uint8 private constant NO_NEXT_PLAYER = 0xFF;
+    uint internal constant CARDS_PER_DEALER = 5;
 
-    bytes1 private constant NO_CARD = 0xFF;
+    //uint internal constant MAX_PLAYERS = (CARDS_PER_DECK-CARDS_PER_DEALER-1) / CARDS_PER_PLAYER;
+    uint internal constant MAX_PLAYERS = 5;
 
-    uint256 private constant NO_HAND_SCORE = (1<<24)-1;
+    uint8 internal constant NO_NEXT_PLAYER = 0xFF;
+
+    bytes1 internal constant NO_CARD = 0xFF;
+
+    uint256 internal constant NO_HAND_SCORE = (1<<24)-1;
 
 // ------------------------------------------------------------------
 // Events
@@ -111,7 +115,7 @@ contract Poker {
 
     event End(uint256 indexed game_id);
 
-    event Balance(address indexed player, uint256 bal, bytes32 x);
+    event Balance(address indexed player, uint256 bal);
 
 // ------------------------------------------------------------------
 // Structures & more efficient packing of said structures
@@ -128,12 +132,13 @@ contract Poker {
         uint pot;
         uint256[] players;
         // These fields can be packed into a single field
-        uint256 dealer;     // Dealers cards
+        uint256 dealer;     // Dealers cards (5 bytes)
         uint8 max_bet_mul;
         uint8 state_round;
         uint8 state_player;
         uint8 state_bet;
-        uint8 player_count;
+        uint player_count;
+        uint32 last_action;  // block.timestmap
     }
 
     struct ProofData {
@@ -144,7 +149,7 @@ contract Poker {
     }
 
     function playerinfo_pack(TablePlayer memory p)
-        private pure
+        internal pure
         returns (uint256 res)
     {
         unchecked {
@@ -165,7 +170,7 @@ contract Poker {
     }
 
     function playerinfo_unpack(uint256 packed, TablePlayer memory p)
-        private pure
+        internal pure
     {
         unchecked {
             p.addr = address(uint160(packed & ((1<<160)-1)));
@@ -187,24 +192,24 @@ contract Poker {
 // ------------------------------------------------------------------
 // Contract storage
 
-    uint256 private g_game_counter;
+    uint256 internal g_game_counter;
 
-    mapping(uint => Table) private g_tables;
+    mapping(uint => Table) internal g_tables;
 
-    bytes32 immutable g_scoring_merkle_root;
+    bytes32 immutable internal g_scoring_merkle_root;
 
-    mapping(address => uint256) private g_balances;
+    mapping(address => uint256) internal g_balances;
 
-    bytes32 private g_secret_seed;
+    bytes32 internal g_secret_seed;
 
-    QueueManager private g_qm;
+    QueueManager internal g_qm;
 
-    uint256[QUEUE_COUNT] private g_game_presets;
+    uint256[QUEUE_COUNT] internal g_game_presets;
 
 // ------------------------------------------------------------------
 // Oasis Sapphire specific code
 
-    address private constant RANDOM_BYTES = 0x0100000000000000000000000000000000000001;
+    address internal constant RANDOM_BYTES = 0x0100000000000000000000000000000000000001;
 
     function _random_bytes32()
         internal view
@@ -253,7 +258,7 @@ contract Poker {
     function preset_change(uint256 preset_id, uint8 max_bet_mul, uint256 bet_size)
         external
     {
-        require( 0 == g_qm.queues[preset_id].count );
+        require( 0 == g_qm.queues[preset_id].count, "261" );
 
         uint preset = (bet_size << 8) | max_bet_mul;
 
@@ -263,7 +268,7 @@ contract Poker {
     }
 
     function cycle_seed(uint256 game_id)
-        private
+        internal
         returns (uint256 y)
     {
         bytes32 x = g_secret_seed;
@@ -277,9 +282,11 @@ contract Poker {
 // Account balance utilities
 
     function deposit(address to)
-        external payable
+        public payable
         returns (uint256)
     {
+        require( msg.sender != address(0) );
+
         uint256 b = g_balances[to] + msg.value;
 
         g_balances[to] = b;
@@ -295,23 +302,15 @@ contract Poker {
         public payable
         returns (uint256)
     {
-        uint256 b = g_balances[msg.sender];
-
-        if( msg.value != 0 )
-        {
-            b = b + msg.value;
-            g_balances[msg.sender] = b;
-        }
-
-        return b;
+        return deposit(msg.sender);
     }
 
-    // Emitted event is public, must be obscured using single-use blinding value XOR with balance
-    // Hash of blinder is provided for reference when user scans blockchain to find their balances
-    function balance(uint256 onetime_blinder)
+    function balance()
         external
     {
-        emit Balance(msg.sender, g_balances[msg.sender] ^ onetime_blinder, keccak256(abi.encodePacked(onetime_blinder)));
+        require( msg.sender != address(0) );
+
+        emit Balance(msg.sender, g_balances[msg.sender]);
     }
 
     function withdraw(uint256 max_amount)
@@ -323,6 +322,8 @@ contract Poker {
     function withdraw(uint256 max_amount, address payable withdraw_to)
         public
     {
+        require( msg.sender != address(0) );
+
         uint256 b = g_balances[msg.sender];
 
         if( b > 0 )
@@ -353,7 +354,7 @@ contract Poker {
     error Queue_No_Position();
 
     function queue_remove_position(Queue storage q, uint qid, uint position)
-        private
+        internal
         returns (address player)
     {
         uint count = q.count;
@@ -385,7 +386,7 @@ contract Poker {
     }
 
     function queue_add(Queue storage q, uint qid, address player)
-        private
+        internal
         returns (uint count)
     {
         uint256 player_queue_positions = g_qm.player_queues[player];
@@ -419,9 +420,11 @@ contract Poker {
     function join(uint preset_id, uint accept_minimum)
         external payable
     {
+        require( msg.sender != address(0) );
+
         uint preset = g_game_presets[preset_id];
 
-        require( preset != 0 );
+        require( preset != 0, "419" );
 
         uint min_balance;
         uint max_bet_mul;
@@ -430,7 +433,7 @@ contract Poker {
             max_bet_mul = preset & 0xFF;
             bet_size = preset >> 8;
             min_balance = (bet_size * max_bet_mul);
-            require( deposit() >= min_balance );
+            require( deposit() >= min_balance, "428" );
         }
 
         uint max_players = MAX_PLAYERS;
@@ -471,7 +474,7 @@ contract Poker {
                 }
             }
 
-            require( player_count >= min_players );
+            require( player_count >= min_players, "469" );
 
             begin(players, player_count, bet_size, max_bet_mul);
         }
@@ -483,6 +486,8 @@ contract Poker {
     function leave(uint preset_id)
         external
     {
+        require( msg.sender != address(0) );
+
         uint position = byte_get(g_qm.player_queues[msg.sender], preset_id);
 
         if( NOT_IN_QUEUE == position ) {
@@ -511,7 +516,7 @@ contract Poker {
     // Durstenfeld's version of Fisher-Yates shuffle
     // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
     function shuffle_deck(uint256 seed, uint8 k)
-        private pure
+        internal pure
         returns (bytes memory deck)
     {
         deck = new bytes(k);
@@ -529,7 +534,7 @@ contract Poker {
     }
 
     function shuffle_players_inplace(uint256 seed, address[] memory players, uint players_count)
-        private pure
+        internal pure
     {
         unchecked {
             for( uint i = (players_count-1); i > 0; i-- )
@@ -542,7 +547,7 @@ contract Poker {
     }
 
     function _next_player_idx(TablePlayer[] memory players, uint start_i)
-        private pure
+        internal pure
         returns (uint)
     {
         unchecked {
@@ -557,10 +562,10 @@ contract Poker {
     }
 
     function begin(address[] memory players, uint players_length, uint bet_size, uint max_bet_mul)
-        private
+        internal
     {
-        require( players.length > 1 );
-        require( players.length <= MAX_PLAYERS );
+        require( players_length > 1, "557" );
+        require( players_length <= MAX_PLAYERS, "558" );
 
         uint game_id = g_game_counter;
 
@@ -571,11 +576,12 @@ contract Poker {
         t.state_round = 0;
         t.state_bet = 1;
         t.max_bet_mul = uint8(max_bet_mul);
+        t.last_action = uint32(block.timestamp);
 
         unchecked {
-            t.pot = (bet_size/2) + bet_size;
+            t.pot = (bet_size>>1) + bet_size;
             t.state_player = uint8(2 % players_length);
-            t.player_count = uint8(players_length);
+            t.player_count = players_length;
 
             emit Created(game_id, players, bet_size, max_bet_mul, t.state_player, t.pot);
 
@@ -609,24 +615,26 @@ contract Poker {
         g_game_counter += 1;
     }
 
-    function _delete_game(uint game_id, Table storage t, uint players_length)
-        private
+    function _delete_game(uint game_id, Table storage t)
+        internal
     {
         uint256[] storage players = t.players;
 
+        /*
         unchecked {
-            for( uint i = 0; i < players_length; i++ ) {
-                delete players[i];
+            while( players.length != 0 ) {
+                players.pop();
             }
         }
 
         delete g_tables[game_id];
+        */
 
         emit End(game_id);
     }
 
-    function _merkle_verify( bytes32 root, bytes32 leaf_hash, bytes32[] calldata path, uint256 index )
-        private pure
+    function _merkle_verify( bytes32 root, bytes32 leaf_hash, bytes32[] memory path, uint256 index )
+        internal pure
         returns (bool)
     {
         bytes32 node = leaf_hash;
@@ -648,46 +656,67 @@ contract Poker {
         return node == root;
     }
 
-    // TODO: player can be forced to fold if taken too long...
+    // Player can be forced to fold if they take too long, any player can trigger this
+    function force2fold(uint game_id)
+        external
+    {
+        Table storage t = g_tables[game_id];
+        uint bet_size = t.bet_size;
+        require( 0 != bet_size, "653" );
+
+        require( block.timestamp >= (t.last_action + FORCE_FOLD_AFTER_N_SECONDS), "655" );
+
+        play(game_id, t.state_player, 0, ProofData("", 0, new bytes32[](0), 0));
+    }
+
+    function _load_players(Table storage t)
+        internal view
+        returns (TablePlayer[] memory players)
+    {
+        unchecked {
+            uint players_length = t.players.length;
+            players = new TablePlayer[](players_length);
+            for( uint i = 0; i < players_length; i++ ) {
+                uint256 pi = t.players[i];
+                if( pi == 0 ) {
+                    break;
+                }
+                playerinfo_unpack(pi, players[i]);
+            }
+        }
+    }
 
     function play(
         uint game_id,
         uint8 player_idx,
         uint8 bet,
-        ProofData calldata proof
+        ProofData memory proof
     )
-        external
+        public
     {
         // Load game table
         Table storage t = g_tables[game_id];
         uint bet_size = t.bet_size;
-        require( bet_size != 0 );
+        require( 0 != bet_size, "671" );                   // Ensure game exists
 
         // Ensure correct game state
-        require( t.state_player == player_idx );
-        require( bet == 0 || bet >= t.state_bet );  // Fold or meet minimum round bet size
-        require( bet <= t.max_bet_mul );            // Do not exceed maximum bet
+        require( t.state_player == player_idx, "674" );
+        require( 0 == bet || bet >= t.state_bet, "675" );  // Fold or meet minimum round bet size
+        require( bet <= t.max_bet_mul, "676" );            // Do not exceed maximum bet
 
         // Load players into memory, rather than accessing storage every time
-        TablePlayer[] memory players;
-        unchecked {
-            uint players_length = t.players.length;
-            players = new TablePlayer[](players_length);
-            for( uint i = 0; i < players_length; i++ ) {
-                playerinfo_unpack(t.players[i], players[i]);
-            }
-        }
+        TablePlayer[] memory players = _load_players(t);
         TablePlayer memory player = players[player_idx];
 
         // User provides proof of their hands score in final round
         // If proof isn't provided they can't win!
         if( 0 != proof.path.length )
         {
-            require( 3 == t.state_round );
+            require( 3 == t.state_round, "693" );
 
-            require( 0 != proof.path.length );
+            require( 0 != proof.path.length, "695" );
 
-            require( CARDS_PER_DEALER == proof.hand.length );
+            require( CARDS_PER_DEALER == proof.hand.length, "697" );
 
             unchecked {
                 bytes32 leaf_hash = sha256(abi.encodePacked(
@@ -695,7 +724,7 @@ contract Poker {
                     bytes1(uint8(proof.score&0xFF)),
                     bytes1(uint8((proof.score>>8)&0xFF))));
 
-                require( true == _merkle_verify(g_scoring_merkle_root, leaf_hash, proof.path, proof.index) );
+                require( true == _merkle_verify(g_scoring_merkle_root, leaf_hash, proof.path, proof.index), "705" );
 
                 bytes memory dealer_cards = bytes_unpack(t.dealer, 5);
 
@@ -718,16 +747,16 @@ contract Poker {
                 }
 
                 // Proof must include all 4 hands
-                require( CARDS_PER_DEALER == hand_count );
+                require( CARDS_PER_DEALER == hand_count, "728" );
             }
 
-            player.score = proof.score & 0xFFFF;
+            player.score = proof.score & SCORE_BITMASK;
             t.players[player_idx] = playerinfo_pack(player);
         }
         else {
-            require( proof.hand.length == 0 );
-            require( proof.index == 0 );
-            require( proof.score == 0 );
+            require( proof.hand.length == 0, "735" );
+            require( proof.index == 0, "736" );
+            require( proof.score == 0, "737" );
         }
 
         // Subtract bet from balance, or force to fold if insufficient balance
@@ -744,14 +773,14 @@ contract Poker {
             }
             else {
                 g_balances[player.addr] = player_bal - bet_amount;
+                // Increase pot and bet multiple
+                t.pot += bet_amount;
+                t.state_bet = bet;
             }
-
-            // Increase pot and bet multiple
-            t.pot += bet_amount;
-            t.state_bet = bet;
         }
 
         uint256 table_pot = t.pot;
+        uint player_count = t.player_count;
 
         // Player folds
         if( 0 == bet )
@@ -759,16 +788,17 @@ contract Poker {
             player.folded = true;
             t.players[player_idx] = playerinfo_pack(player);
 
-            t.player_count -= 1;
+            player_count -= 1;
+            t.player_count = uint8(player_count);
 
             // Single remaining player wins by default
-            if( 1 == t.player_count )
+            if( 1 == player_count )
             {
                 emit Bet(game_id, player_idx, bet, table_pot, NO_NEXT_PLAYER);
 
                 _perform_round3(game_id, table_pot, players);
 
-                _delete_game(game_id, t, players.length);
+                _delete_game(game_id, t);
 
                 return;
             }
@@ -802,29 +832,31 @@ contract Poker {
             }
             else if( 3 == round ) {
                 _perform_round3(game_id, table_pot, players);
-                _delete_game(game_id, t, players.length);
+                _delete_game(game_id, t);
                 return;
             }
 
             // Reset round
-            t.state_round = round + 1;
-            t.state_bet = 1;
+            unchecked {
+                t.state_round = round + 1;
+                t.state_bet = 1;
+            }
         }
         else {
             t.state_player = next_player_idx;
         }
+
+        t.last_action = uint32(block.timestamp);
     }
 
     function _perform_round3(uint256 game_id, uint table_pot, TablePlayer[] memory players)
-        private
+        internal
     {
-        (address[] memory player_addresses, uint256[] memory payouts, uint256 dust) = _winners(players, table_pot);
+        (address[] memory player_addresses, uint256[] memory payouts) = _winners(players, table_pot);
 
         for( uint i = 0; i < payouts.length; i++ )
         {
-            uint256 po = payouts[i] + dust;
-
-            dust = 0;
+            uint256 po = payouts[i];
 
             emit Win(game_id, uint8(i), po);
 
@@ -834,14 +866,13 @@ contract Poker {
     }
 
     function _winners(TablePlayer[] memory players, uint256 pot)
-        private view
+        internal pure
         returns (
             address[] memory player_addresses,
-            uint256[] memory payouts,
-            uint256 dust
+            uint256[] memory payouts
         )
     {
-        uint players_length = players.length;
+        uint256 dust;
 
         uint lowest_score = NO_HAND_SCORE;
 
@@ -850,7 +881,7 @@ contract Poker {
         // Card comparison, users must have provided proof of their best in the previous round
         // If they don't provide proof, they won't win even if they have the best hand
         unchecked {
-            for( uint i = 0; i < players_length; i++ )
+            for( uint i = 0; i < players.length; i++ )
             {
                 TablePlayer memory x = players[i];
 
@@ -871,21 +902,22 @@ contract Poker {
             }
         }
 
-        require( lowest_count != 0 );
+        // At least one player must win!
+        require( 0 != lowest_count, "884" );
 
         // Payout is split equally between with the same lowest score
         // All other players get a zero payout
 
-        payouts = new uint256[](players_length);
+        payouts = new uint256[](players.length);
 
-        player_addresses = new address[](players_length);
+        player_addresses = new address[](players.length);
 
         uint256 winning_payout = pot / lowest_count;
 
         dust = pot - (winning_payout * lowest_count);
 
         unchecked {
-            for( uint i = 0; i < players_length; i++ )
+            for( uint i = 0; i < players.length; i++ )
             {
                 TablePlayer memory x = players[i];
 
@@ -893,7 +925,9 @@ contract Poker {
 
                 if( ! x.folded && x.score == lowest_score )
                 {
-                    payouts[i] = winning_payout;
+                    payouts[i] = winning_payout + dust;
+
+                    dust = 0;
                 }
                 else {
                     payouts[i] = 0;

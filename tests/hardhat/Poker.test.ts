@@ -1,21 +1,28 @@
 import { expect } from "chai";
 import { readFileSync } from "fs";
-import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
 import * as hre from "hardhat";
 import { LobbyState, } from "../../ts/gamestate";
 import { DECKIDX, ScoreTree } from "../../ts/scoretree";
-import { BytesLike } from "ethers";
+import { BytesLike, ContractTransaction, Signer } from "ethers";
+import * as sapphire from "@oasisprotocol/sapphire-paratime";
+import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 
 const ethers = hre.ethers;
 
+var seed = 1;
+function deterministic_random() {
+    var x = Math.sin(seed++) * 10000;
+    return x - Math.floor(x);
+}
+
 function randint(min: number, max: number): number {
-    return Math.floor(Math.random() * (max - min) + min);
+    return Math.floor(deterministic_random() * (max - min) + min);
 }
 
 function random_bet(fold_chance:number, min: number, max: number)
 {
-    const m = randint(0, fold_chance);
-    if( m == 0 ) {
+    const m = randint(1, fold_chance);
+    if( m == 1 ) {
         return ['fold', 0];
     }
     const n = randint(Math.max(1, min), max);
@@ -29,34 +36,51 @@ describe('Poker', () => {
 
     async function deployFixture() {
         hre.tracer.enabled = false;
-        const Poker = await ethers.getContractFactory('Poker');
+        const Poker = await ethers.getContractFactory('TestablePoker');
         const pkr = await Poker.deploy(MERKLE_ROOT);
 
-        // Setup some presets
-        await (await pkr.preset_change(0, 5, 10)).wait();
+        let signers = (await ethers.getSigners()).slice(0, 6);
+        while( signers.length < 5 ) {
+            throw Error('Not enough signers to run tests!');
+        }
 
-        // Attach all the accounts to the lobby
-        const accounts = (await ethers.getSigners()).map((_) => {
+        // Setup some presets
+        console.log('   - Setting initial presets');
+        const preset_tx = await pkr.preset_change(0, 5, 10);
+        await preset_tx.wait();
+
+        const accounts = [];
+        for( const _ of signers ) {
             const contract = pkr.connect(_);
-            const lobby = new LobbyState(st, [], _.address);
-            return {
+            const addr = _.address;
+            const lobby = new LobbyState(st, [], addr);
+            accounts.push({
                 wallet: _,
-                address: _.address,
+                address: addr,
                 contract: contract,
                 lobby: lobby
-            };
-        });
+            });
+        }
 
-        return { Poker, pkr, accounts };
+        return { accounts };
     }
+
+    it('Doesnt break again', async () => {
+
+    });
+
     it('Runs', async ()=>{
-        const { accounts } = await loadFixture(deployFixture);
+        const { accounts } = await deployFixture();
 
         // Give every account some cash to play with
-        for( const p of accounts )  {
-            const x = await p.contract["deposit()"]({value: 1000n});
-            await x.wait();
+        console.log('   - Making deposits');
+        let deposit_txs : Promise<ContractTransaction>[] = [];
+        for( const p of accounts ) {
+            console.log('     -', p.address);
+            const x = p.contract["deposit()"]({value: 100000n});
+            deposit_txs.push(x);
         }
+        Promise.all((await Promise.all(deposit_txs)).map(_ => _.wait()));
 
         // Simulate game queues with 2 to 10 players
         for( let player_count = 2; player_count <= 5; player_count++ )
@@ -64,12 +88,15 @@ describe('Poker', () => {
             console.log('--------------------------------------------');
             console.log("PLAYER COUNT", player_count);
             // Begin a poker game with the players
-            for( let game_count = 0; game_count < 5; game_count++ ) {
+            for( let game_count = 0; game_count < 2; game_count++ ) {
                 console.log("GAME COUNT", game_count);
                 console.log('.......................');
                 let total_log_bytes = 0;
                 let total_gas_used = 0n;
 
+                if( accounts.length < player_count ) {
+                    throw Error('Not enough players');
+                }
                 const game_accounts = accounts.slice(0, player_count);
 
                 for( const pa of game_accounts ) {
@@ -104,6 +131,14 @@ describe('Poker', () => {
                     throw Error('Unable to determine game_id!');
                 }
 
+                // Get state after action
+                /*
+                console.log('Initial state!');
+                const p3 = await game_accounts[0].contract.dump_state(game_id);
+                const p4 = await p3.wait();
+                console.log({t: p4.events?.[0].args?.t, p: p4.events?.[0].args?.p, b:p4.events?.[0].args?.b});
+                */
+
                 const empty_proof_data : [BytesLike, number, BytesLike[], number] = [[], 0, [], 0];
                 let game_running = true;
                 let fold_count = 0;
@@ -133,21 +168,50 @@ describe('Poker', () => {
                         }
 
                         const p = {hand: my_proof[0], score: my_proof[1], path: my_proof[2], index: my_proof[3]};
-                        const [bet_kind, bet_size] = random_bet(5, game.min_bet_mul, game.info.max_bet_mul);
+                        const [bet_kind, bet_size] = random_bet(10, game.min_bet_mul, game.info.max_bet_mul);
+
+                        console.log(`   ${game_id} Round ${game.round}/${game.my_idx}/${game.player_next_idx}, player ${pa.address}, ${bet_kind}`);
+
                         let p1 = await pa.contract.play(game.game_id, game.player_next_idx, bet_size, p);
                         let p2 = await p1.wait();
+
                         total_log_bytes = total_log_bytes + p2.logs.map((_)=>_.data.length-2).reduce((a, b) => a + b, 0);
                         total_gas_used += p2.gasUsed.toBigInt();
                         if( bet_kind == 'fold' ) {
                             fold_count += 1;
                         }
 
-                        console.log(`   Round ${game.round}/${game.my_idx}/${game.player_next_idx}, player ${pa.address}, ${bet_kind} gc=${p2.gasUsed}`);
+                        console.log(`    ... gc=${p2.gasUsed}`);
 
                         // Notify other accounts of this games actions
                         for( const pa2 of game_accounts ) {
                             pa2.lobby.step_from_receipt(p2);
                         }
+
+                        // Get state after action
+                        /*
+                        console.log('Calling dump_state!');
+                        const p3 = await pa.contract.dump_state(game_id);
+                        const p4 = await p3.wait();
+                        console.log({t: p4.events?.[0].args?.t, p: p4.events?.[0].args?.p, b:p4.events?.[0].args?.b});
+                        */
+
+                        /*
+                        console.log('Loading state');
+                        const p5 = await pa.contract.load_state(p4.events?.[0].args?.b, game_id);
+                        const p6 = await p5.wait();
+
+                        console.log('Dumping state again');
+                        const p7 = await pa.contract.dump_state(game_id);
+                        const p8 = await p7.wait();
+                        console.log(p8.events?.[0].args);
+
+                        const p5 = pa.contract.interface._abiCoder.decode([
+                            "tuple(uint,uint,uint[],uint,uint8,uint8,uint8,uint8,uint8,uint32)",
+                            "tuple(address,bytes1[2],uint,bool)[]"
+                        ], p3);
+                        console.log(p4);
+                        */
 
                         if( game.my_result ) {
                             game_running = false;

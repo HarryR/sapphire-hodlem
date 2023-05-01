@@ -2,10 +2,8 @@ DOCKER_RUN=docker run -v `pwd`:/src:rw --rm -ti -u `id -u`:`id -g`
 HARDHAT=pnpm hardhat --network sapphire_local
 REPO=sapphire-poker
 LABEL=harryr
-DEVACCT_PUBLIC=0x6052795666b7B062910AaC422b558445F1E4bcC5
-DEVACCT_SECRET=0xef2cebd4fe2ed0045f8b12bea2b9a7245d2db5e9d35eb7234f65c15e8facbecc
 DOCKER_RUN=docker run -v `pwd`:/src:rw --rm -ti -u `id -u`:`id -g`
-DOCKER_RUN_DEV=$(DOCKER_RUN) --network host -w /src -h poker-dev -e HOME=/src -e HISTFILESIZE=0 -e HISTCONTROL=ignoreboth:erasedups -e PRIVATE_KEY=$(DEVACCT_SECRET)
+DOCKER_RUN_DEV=$(DOCKER_RUN) --network host -w /src -h poker-dev -e HOME=/src -e HISTFILESIZE=0 -e HISTCONTROL=ignoreboth:erasedups
 PYTHON=PYTHONPATH=py python3
 
 all:
@@ -13,6 +11,12 @@ all:
 
 tsc:
 	pnpm tsc
+
+hardhat-test:
+	pnpm hardhat test
+
+hardhat-coverage:
+	pnpm hardhat coverage
 
 scores-tree: cache/scores/scores.root
 
@@ -22,8 +26,11 @@ cache/scores/scores.root: $(wildcard py/*.py)
 python:
 	$(PYTHON)
 
+SAPPHIRE_DEV_DOCKER=ghcr.io/oasisprotocol/sapphire-dev:local
+#SAPPHIRE_DEV_DOCKER=ghcr.io/oasisprotocol/sapphire-dev:latest
+
 sapphire-dev:
-	docker run --rm -it -p8545:8545 -p8546:8546 ghcr.io/oasisprotocol/sapphire-dev:local -to $(DEVACCT_PUBLIC)
+	docker run --rm -it -p8545:8545 -p8546:8546 $(SAPPHIRE_DEV_DOCKER) -to 'test test test test test test test test test test test junk' -n 20
 
 cache:
 	mkdir cache
