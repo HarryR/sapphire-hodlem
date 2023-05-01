@@ -142,7 +142,7 @@ contract Poker {
     struct Table {
         uint pot;
         uint256 tableinfo_packed;
-        uint256[] players;
+        uint256[MAX_PLAYERS] players;
     }
 
     function tableinfo_pack(TableInfo memory t, bytes memory deck)
@@ -694,12 +694,12 @@ contract Poker {
 
             bytes1[2] memory player_hand = [deck[player_offset], deck[player_offset + 1]];
 
-            t.players.push(playerinfo_pack(TablePlayer({
+            t.players[i] = playerinfo_pack(TablePlayer({
                 addr: players[i],
                 score: NO_HAND_SCORE,   // Lowest score wins
                 hand: player_hand,
                 folded: false
-            })));
+            }));
 
             emit Hand(game_id, uint8(i), player_hand);
         }
@@ -716,11 +716,9 @@ contract Poker {
     function _delete_game(uint game_id, Table storage t)
         internal
     {
-        uint256[] storage players = t.players;
-
         unchecked {
-            while( players.length != 0 ) {
-                players.pop();
+            for( uint i = 0; i < MAX_PLAYERS; i++ )  {
+                delete t.players[i];
             }
         }
 
@@ -772,14 +770,18 @@ contract Poker {
         returns (TablePlayer[] memory players)
     {
         unchecked {
-            uint players_length = t.players.length;
-            players = new TablePlayer[](players_length);
-            for( uint i = 0; i < players_length; i++ ) {
+            players = new TablePlayer[](MAX_PLAYERS);
+            uint i;
+            for( i = 0; i < MAX_PLAYERS; i++ ) {
                 uint256 pi = t.players[i];
                 if( pi == 0 ) {
                     break;
                 }
                 playerinfo_unpack(pi, players[i]);
+            }
+            // Override players.length
+            assembly {
+                mstore(players, i)
             }
         }
     }
