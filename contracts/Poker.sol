@@ -515,19 +515,25 @@ contract Poker {
 
     // Durstenfeld's version of Fisher-Yates shuffle
     // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
-    function shuffle_deck(uint256 seed, uint8 k)
+    function shuffle_deck(uint256 seed, uint k)
         internal pure
         returns (bytes memory deck)
     {
+        require( k < 32 );
         deck = new bytes(k);
         unchecked {
-            for( uint8 i = 0; i < k; i++ ) {
-                deck[i] = bytes1(i);
-            }
-            for( uint i = (k-1); i > 0; i-- ) {
-                seed = uint256(keccak256(abi.encodePacked(seed)));
-                uint j = seed % i;
-                (deck[j], deck[i]) = (deck[i], deck[j]);
+            uint bt = 0;
+            uint sc = 0;
+            while( sc < k ) {
+                uint j = seed % 52;
+                uint n = 1<<j;
+                seed >>= 8;
+                if( bt & n != 0 ) {
+                    continue;
+                }
+                deck[sc] = bytes1(uint8(j));
+                bt |= n;
+                sc += 1;
             }
         }
         return deck;
@@ -585,7 +591,7 @@ contract Poker {
 
             emit Created(game_id, players, bet_size, max_bet_mul, t.state_player, t.pot);
 
-            bytes memory deck = shuffle_deck(cycle_seed(game_id), CARDS_PER_DECK);
+            bytes memory deck = shuffle_deck(cycle_seed(game_id), CARDS_PER_DEALER + (players_length * CARDS_PER_PLAYER));
 
             t.dealer = bytes_pack(deck, CARDS_PER_DEALER);
 
