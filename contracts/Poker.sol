@@ -545,9 +545,9 @@ contract Poker {
         unchecked {
             for( uint i = (players_count-1); i > 0; i-- )
             {
-                seed = uint256(keccak256(abi.encodePacked(seed)));
                 uint j = seed % i;
                 (players[j], players[i]) = (players[i], players[j]);
+                seed >>= 8;
             }
         }
     }
