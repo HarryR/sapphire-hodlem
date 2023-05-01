@@ -2,6 +2,7 @@ import { HardhatUserConfig } from "hardhat/config";
 import '@oasisprotocol/sapphire-hardhat';
 import "@nomicfoundation/hardhat-toolbox";
 import "hardhat-tracer";
+import "hardhat-contract-sizer";
 import 'solidity-coverage'
 
 const env_private_key = process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [];

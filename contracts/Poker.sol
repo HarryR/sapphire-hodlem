@@ -103,13 +103,15 @@ contract Poker {
 // ------------------------------------------------------------------
 // Events
 
-    event Created(uint256 indexed game_id, address[] players, uint256 bet_size, uint max_bet_mul, uint8 player_start_idx, uint256 pot);
+    event Preset(uint256 preset_id, uint256 preset);
+
+    event Created(uint256 indexed game_id, address[] players, uint256 bet_size, uint max_bet_mul, uint player_start_idx, uint256 pot);
 
     event Hand(uint256 indexed game_id, uint8 player_idx, bytes1[2] cards);
 
     event Round(uint256 indexed game_id, uint8 round_idx, bytes1[3] cards, uint8 player_next_idx);
 
-    event Bet(uint256 indexed game_id, uint8 player_idx, uint8 multiplier, uint256 pot, uint8 player_next_idx);
+    event Bet(uint256 indexed game_id, uint player_idx, uint8 multiplier, uint256 pot, uint8 player_next_idx);
 
     event Win(uint256 indexed game_id, uint8 player_idx, uint256 payout);
 
@@ -127,18 +129,107 @@ contract Poker {
         bool folded;
     }
 
+    struct TableInfo {
+        uint bet_size;      // 144 bits
+        uint max_bet_mul;   // 8 bits
+        uint state_round;   // 8 bits
+        uint state_player;  // 8 bits
+        uint state_bet;     // 8 bits
+        uint player_count;  // 8 bits
+        uint last_action;   // 32 bits, block.timestmap
+    }
+
     struct Table {
-        uint bet_size;      // TODO: can specify game preset, to retrieve settings?
         uint pot;
+        uint256 tableinfo_packed;
         uint256[] players;
-        // These fields can be packed into a single field
-        uint256 dealer;     // Dealers cards (5 bytes)
-        uint8 max_bet_mul;
-        uint8 state_round;
-        uint8 state_player;
-        uint8 state_bet;
-        uint player_count;
-        uint32 last_action;  // block.timestmap
+    }
+
+    function tableinfo_pack(TableInfo memory t, bytes memory deck)
+        internal pure
+        returns (uint256 res)
+    {
+        res = 0;
+
+        uint sh8 = 8;
+
+        unchecked {
+            for( uint i = 0; i < 5; i++ ) {
+                res += uint8(deck[i]);
+                res <<= sh8;
+            }
+
+            res += t.max_bet_mul;
+
+            res <<= sh8;
+            res += t.state_round;
+
+            res <<= sh8;
+            res += t.state_player;
+
+            res <<= sh8;
+            res += t.state_bet;
+
+            res <<= sh8;
+            res += t.player_count;
+
+            res <<= 32;
+            res += t.last_action;
+
+            res <<= 144;
+            res += t.bet_size;
+        }
+    }
+
+    // Packs table info into 14 bytes (112 bits), allowing 18 bytes (144 bits) for bet_size
+    function tableinfo_unpack(uint256 res)
+        internal pure
+        returns (TableInfo memory t, bytes memory deck)
+    {
+        uint sh8 = 8;
+        uint ff = 0xFF;
+
+        unchecked {
+            uint bet_size = res & ((1<<144)-1);
+            res >>= 144;
+
+            uint last_action = res & 0xFFFFFFFF;
+            res >>= 32;
+
+            uint player_count = res & ff;
+            res >>= sh8;
+
+            uint state_bet = res & ff;
+            res >>= sh8;
+
+            uint state_player = res & ff;
+            res >>= sh8;
+
+            uint state_round = res & ff;
+            res >>= sh8;
+
+            uint max_bet_mul = res & ff;
+            res >>= sh8;
+
+            t = TableInfo(bet_size, max_bet_mul, state_round, state_player, state_bet, player_count, last_action);
+
+            deck = new bytes(5);
+
+            deck[4] = bytes1(uint8(res & ff));
+            res >>= sh8;
+
+            deck[3] = bytes1(uint8(res & ff));
+            res >>= sh8;
+
+            deck[2] = bytes1(uint8(res & ff));
+            res >>= sh8;
+
+            deck[1] = bytes1(uint8(res & ff));
+            res >>= sh8;
+
+            deck[0] = bytes1(uint8(res & ff));
+            res >>= sh8;
+        }
     }
 
     struct ProofData {
@@ -238,8 +329,6 @@ contract Poker {
         g_secret_seed = _random_bytes32();
     }
 
-    event Preset(uint256 preset_id, uint256 preset);
-
     function presets_get()
         external
     {
@@ -258,13 +347,17 @@ contract Poker {
     function preset_change(uint256 preset_id, uint8 max_bet_mul, uint256 bet_size)
         external
     {
-        require( 0 == g_qm.queues[preset_id].count, "261" );
+        require( 0 == g_qm.queues[preset_id].count );
 
-        uint preset = (bet_size << 8) | max_bet_mul;
+        unchecked {
+            require( bet_size < (1<<144) );
 
-        g_game_presets[preset_id] = preset;
+            uint preset = (bet_size << 8) | max_bet_mul;
 
-        emit Preset(preset_id, preset);
+            g_game_presets[preset_id] = preset;
+
+            emit Preset(preset_id, preset);
+        }
     }
 
     function cycle_seed(uint256 game_id)
@@ -424,7 +517,7 @@ contract Poker {
 
         uint preset = g_game_presets[preset_id];
 
-        require( preset != 0, "419" );
+        require( preset != 0 );
 
         uint min_balance;
         uint max_bet_mul;
@@ -433,7 +526,7 @@ contract Poker {
             max_bet_mul = preset & 0xFF;
             bet_size = preset >> 8;
             min_balance = (bet_size * max_bet_mul);
-            require( deposit() >= min_balance, "428" );
+            require( deposit() >= min_balance );
         }
 
         uint max_players = MAX_PLAYERS;
@@ -474,7 +567,7 @@ contract Poker {
                 }
             }
 
-            require( player_count >= min_players, "469" );
+            require( player_count >= min_players );
 
             begin(players, player_count, bet_size, max_bet_mul);
         }
@@ -558,7 +651,7 @@ contract Poker {
     {
         unchecked {
             for( uint i = start_i; i < players.length; i++ ) {
-                if( true == players[i].folded ) {
+                if( false != players[i].folded ) {
                     continue;
                 }
                 return i;
@@ -570,46 +663,45 @@ contract Poker {
     function begin(address[] memory players, uint players_length, uint bet_size, uint max_bet_mul)
         internal
     {
-        require( players_length > 1, "557" );
-        require( players_length <= MAX_PLAYERS, "558" );
+        require( players_length > 1 );
+        require( players_length <= MAX_PLAYERS );
 
         uint game_id = g_game_counter;
 
         shuffle_players_inplace(cycle_seed(game_id), players, players_length);
 
         Table storage t = g_tables[game_id];
-        t.bet_size = bet_size;
-        t.state_round = 0;
-        t.state_bet = 1;
-        t.max_bet_mul = uint8(max_bet_mul);
-        t.last_action = uint32(block.timestamp);
+        TableInfo memory ti = TableInfo({
+            bet_size: bet_size,
+            max_bet_mul: max_bet_mul,
+            state_round: 0,
+            state_player: uint8(2 % players_length),
+            state_bet: 1,
+            player_count: players_length,
+            last_action: block.timestamp
+        });
+        t.pot = (bet_size/2) + bet_size;
 
-        unchecked {
-            t.pot = (bet_size>>1) + bet_size;
-            t.state_player = uint8(2 % players_length);
-            t.player_count = players_length;
+        bytes memory deck = shuffle_deck(cycle_seed(game_id), CARDS_PER_DEALER + (players_length * CARDS_PER_PLAYER));
 
-            emit Created(game_id, players, bet_size, max_bet_mul, t.state_player, t.pot);
+        t.tableinfo_packed = tableinfo_pack(ti, deck);
 
-            bytes memory deck = shuffle_deck(cycle_seed(game_id), CARDS_PER_DEALER + (players_length * CARDS_PER_PLAYER));
+        emit Created(game_id, players, bet_size, max_bet_mul, ti.state_player, t.pot);
 
-            t.dealer = bytes_pack(deck, CARDS_PER_DEALER);
+        for( uint i = 0; i < players_length; i++ )
+        {
+            uint player_offset = CARDS_PER_DEALER + (i * CARDS_PER_PLAYER);
 
-            for( uint i = 0; i < players_length; i++ )
-            {
-                uint player_offset = CARDS_PER_DEALER + (i * CARDS_PER_PLAYER);
+            bytes1[2] memory player_hand = [deck[player_offset], deck[player_offset + 1]];
 
-                bytes1[2] memory player_hand = [deck[player_offset], deck[player_offset + 1]];
+            t.players.push(playerinfo_pack(TablePlayer({
+                addr: players[i],
+                score: NO_HAND_SCORE,   // Lowest score wins
+                hand: player_hand,
+                folded: false
+            })));
 
-                t.players.push(playerinfo_pack(TablePlayer({
-                    addr: players[i],
-                    score: NO_HAND_SCORE,   // Lowest score wins
-                    hand: player_hand,
-                    folded: false
-                })));
-
-                emit Hand(game_id, uint8(i), player_hand);
-            }
+            emit Hand(game_id, uint8(i), player_hand);
         }
 
         g_balances[players[0]] -= bet_size / 2;
@@ -626,7 +718,6 @@ contract Poker {
     {
         uint256[] storage players = t.players;
 
-        /*
         unchecked {
             while( players.length != 0 ) {
                 players.pop();
@@ -634,7 +725,6 @@ contract Poker {
         }
 
         delete g_tables[game_id];
-        */
 
         emit End(game_id);
     }
@@ -667,12 +757,14 @@ contract Poker {
         external
     {
         Table storage t = g_tables[game_id];
-        uint bet_size = t.bet_size;
-        require( 0 != bet_size, "653" );
+        uint tableinfo_packed = t.tableinfo_packed;
+        require( 0 != tableinfo_packed );
 
-        require( block.timestamp >= (t.last_action + FORCE_FOLD_AFTER_N_SECONDS), "655" );
+        (TableInfo memory ti, bytes memory deck) = tableinfo_unpack(tableinfo_packed);
 
-        play(game_id, t.state_player, 0, ProofData("", 0, new bytes32[](0), 0));
+        require( block.timestamp >= (ti.last_action + FORCE_FOLD_AFTER_N_SECONDS) );
+
+        play(game_id, ti.state_player, 0, ProofData("", 0, new bytes32[](0), 0));
     }
 
     function _load_players(Table storage t)
@@ -694,7 +786,7 @@ contract Poker {
 
     function play(
         uint game_id,
-        uint8 player_idx,
+        uint player_idx,
         uint8 bet,
         ProofData memory proof
     )
@@ -702,13 +794,15 @@ contract Poker {
     {
         // Load game table
         Table storage t = g_tables[game_id];
-        uint bet_size = t.bet_size;
-        require( 0 != bet_size, "671" );                   // Ensure game exists
+        uint tableinfo_packed = t.tableinfo_packed;
+        require( tableinfo_packed != 0 );
+
+        (TableInfo memory ti, bytes memory dealer_cards) = tableinfo_unpack(t.tableinfo_packed);                // Ensure game exists
 
         // Ensure correct game state
-        require( t.state_player == player_idx, "674" );
-        require( 0 == bet || bet >= t.state_bet, "675" );  // Fold or meet minimum round bet size
-        require( bet <= t.max_bet_mul, "676" );            // Do not exceed maximum bet
+        require( ti.state_player == player_idx );
+        require( 0 == bet || bet >= ti.state_bet );  // Fold or meet minimum round bet size
+        require( bet <= ti.max_bet_mul );            // Do not exceed maximum bet
 
         // Load players into memory, rather than accessing storage every time
         TablePlayer[] memory players = _load_players(t);
@@ -718,11 +812,11 @@ contract Poker {
         // If proof isn't provided they can't win!
         if( 0 != proof.path.length )
         {
-            require( 3 == t.state_round, "693" );
+            require( 3 == ti.state_round );
 
-            require( 0 != proof.path.length, "695" );
+            require( 0 != proof.path.length );
 
-            require( CARDS_PER_DEALER == proof.hand.length, "697" );
+            require( CARDS_PER_DEALER == proof.hand.length );
 
             unchecked {
                 bytes32 leaf_hash = sha256(abi.encodePacked(
@@ -730,9 +824,7 @@ contract Poker {
                     bytes1(uint8(proof.score&0xFF)),
                     bytes1(uint8((proof.score>>8)&0xFF))));
 
-                require( true == _merkle_verify(g_scoring_merkle_root, leaf_hash, proof.path, proof.index), "705" );
-
-                bytes memory dealer_cards = bytes_unpack(t.dealer, 5);
+                require( true == _merkle_verify(g_scoring_merkle_root, leaf_hash, proof.path, proof.index) );
 
                 // Verify all cards in the proof hand exist in either dealer or player hands
                 uint256 hand_count = 0;
@@ -753,22 +845,22 @@ contract Poker {
                 }
 
                 // Proof must include all 4 hands
-                require( CARDS_PER_DEALER == hand_count, "728" );
+                require( CARDS_PER_DEALER == hand_count );
             }
 
             player.score = proof.score & SCORE_BITMASK;
             t.players[player_idx] = playerinfo_pack(player);
         }
         else {
-            require( proof.hand.length == 0, "735" );
-            require( proof.index == 0, "736" );
-            require( proof.score == 0, "737" );
+            require( proof.hand.length == 0 );
+            require( proof.index == 0 );
+            require( proof.score == 0 );
         }
 
         // Subtract bet from balance, or force to fold if insufficient balance
-        if( bet_size != 0 )
+        if( ti.bet_size != 0 )
         {
-            uint256 bet_amount = bet_size * bet;
+            uint256 bet_amount = ti.bet_size * bet;
 
             uint256 player_bal = g_balances[player.addr];
 
@@ -781,12 +873,11 @@ contract Poker {
                 g_balances[player.addr] = player_bal - bet_amount;
                 // Increase pot and bet multiple
                 t.pot += bet_amount;
-                t.state_bet = bet;
+                ti.state_bet = bet;
             }
         }
 
         uint256 table_pot = t.pot;
-        uint player_count = t.player_count;
 
         // Player folds
         if( 0 == bet )
@@ -794,11 +885,10 @@ contract Poker {
             player.folded = true;
             t.players[player_idx] = playerinfo_pack(player);
 
-            player_count -= 1;
-            t.player_count = uint8(player_count);
+            ti.player_count -= 1;
 
             // Single remaining player wins by default
-            if( 1 == player_count )
+            if( 1 == ti.player_count )
             {
                 emit Bet(game_id, player_idx, bet, table_pot, NO_NEXT_PLAYER);
 
@@ -817,11 +907,9 @@ contract Poker {
         // When all players have acted this round
         if( NO_NEXT_PLAYER == next_player_idx )
         {
-            uint8 round = t.state_round;
+            uint round = ti.state_round;
 
-            bytes memory dealer_cards = bytes_unpack(t.dealer, 5);
-
-            t.state_player = next_player_idx = uint8(_next_player_idx(players, 0));
+            ti.state_player = next_player_idx = uint8(_next_player_idx(players, 0));
 
             if( 0 == round ) {
                 emit Round(game_id, 1, [
@@ -844,15 +932,17 @@ contract Poker {
 
             // Reset round
             unchecked {
-                t.state_round = round + 1;
-                t.state_bet = 1;
+                ti.state_round = round + 1;
+                ti.state_bet = 1;
             }
         }
         else {
-            t.state_player = next_player_idx;
+            ti.state_player = next_player_idx;
         }
 
-        t.last_action = uint32(block.timestamp);
+        ti.last_action = uint32(block.timestamp);
+
+        t.tableinfo_packed = tableinfo_pack(ti, dealer_cards);
     }
 
     function _perform_round3(uint256 game_id, uint table_pot, TablePlayer[] memory players)
@@ -909,7 +999,7 @@ contract Poker {
         }
 
         // At least one player must win!
-        require( 0 != lowest_count, "884" );
+        require( 0 != lowest_count );
 
         // Payout is split equally between with the same lowest score
         // All other players get a zero payout
