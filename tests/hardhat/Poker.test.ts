@@ -3,9 +3,7 @@ import { readFileSync } from "fs";
 import * as hre from "hardhat";
 import { LobbyState, } from "../../ts/gamestate";
 import { DECKIDX, ScoreTree } from "../../ts/scoretree";
-import { BytesLike, ContractTransaction, Signer } from "ethers";
-import * as sapphire from "@oasisprotocol/sapphire-paratime";
-import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
+import { BytesLike, ContractTransaction } from "ethers";
 
 const ethers = hre.ethers;
 
@@ -131,7 +129,7 @@ describe('Poker', () => {
                     throw Error('Unable to determine game_id!');
                 }
 
-                // Get state after action
+                // Get initial game state for inspection
                 /*
                 console.log('Initial state!');
                 const p3 = await game_accounts[0].contract.dump_state(game_id);
@@ -172,8 +170,10 @@ describe('Poker', () => {
 
                         console.log(`   ${game_id} Round ${game.round}/${game.my_idx}/${game.player_next_idx}, player ${pa.address}, ${bet_kind}`);
 
+                        hre.tracer.enabled = true;
                         let p1 = await pa.contract.play(game.game_id, game.player_next_idx, bet_size, p);
                         let p2 = await p1.wait();
+                        hre.tracer.enabled = false;
 
                         total_log_bytes = total_log_bytes + p2.logs.map((_)=>_.data.length-2).reduce((a, b) => a + b, 0);
                         total_gas_used += p2.gasUsed.toBigInt();
@@ -187,31 +187,6 @@ describe('Poker', () => {
                         for( const pa2 of game_accounts ) {
                             pa2.lobby.step_from_receipt(p2);
                         }
-
-                        // Get state after action
-                        /*
-                        console.log('Calling dump_state!');
-                        const p3 = await pa.contract.dump_state(game_id);
-                        const p4 = await p3.wait();
-                        console.log({t: p4.events?.[0].args?.t, p: p4.events?.[0].args?.p, b:p4.events?.[0].args?.b});
-                        */
-
-                        /*
-                        console.log('Loading state');
-                        const p5 = await pa.contract.load_state(p4.events?.[0].args?.b, game_id);
-                        const p6 = await p5.wait();
-
-                        console.log('Dumping state again');
-                        const p7 = await pa.contract.dump_state(game_id);
-                        const p8 = await p7.wait();
-                        console.log(p8.events?.[0].args);
-
-                        const p5 = pa.contract.interface._abiCoder.decode([
-                            "tuple(uint,uint,uint[],uint,uint8,uint8,uint8,uint8,uint8,uint32)",
-                            "tuple(address,bytes1[2],uint,bool)[]"
-                        ], p3);
-                        console.log(p4);
-                        */
 
                         if( game.my_result ) {
                             game_running = false;

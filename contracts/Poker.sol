@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3
+// SPDX-License-Identifier: AGPL-3.0-or-later
 pragma solidity ^0.8.0;
 
 // ------------------------------------------------------------------
@@ -24,37 +24,6 @@ function byte_set(uint256 x, uint off, uint val)
     }
 }
 
-function bytes_unpack(uint256 packed, uint n_cards)
-    pure
-    returns (bytes memory cards)
-{
-    unchecked {
-        cards = new bytes(n_cards);
-        for( uint i = 0; i < n_cards; i++ ) {
-            cards[i] = bytes1(uint8(packed & 0xFF));
-            packed >>= 8;
-        }
-    }
-}
-
-function bytes_pack(bytes memory cards, uint n_cards)
-    pure
-    returns (uint256 packed)
-{
-    // NOTE: must pack so unpacking retrieves in same indexed order
-    // Going from card 0 to card n results in card n coming out first
-
-    unchecked {
-        uint i = n_cards;
-        while( i-- != 0 ) {
-            packed <<= 8;
-            packed = packed + uint8(cards[i]);
-            if( i == 0 ) {
-                break;
-            }
-        }
-    }
-}
 
 // ------------------------------------------------------------------
 // Handling the player / table queue
@@ -243,6 +212,8 @@ contract Poker {
         internal pure
         returns (uint256 res)
     {
+        // TODO: add 'refund' uint8
+
         unchecked {
             res += uint8(p.hand[0]);
 
@@ -278,6 +249,8 @@ contract Poker {
 
             p.hand[0] = bytes1(uint8(packed&0xFF));
         }
+
+        // TODO: add 'refund' uint8
     }
 
 // ------------------------------------------------------------------
@@ -564,6 +537,10 @@ contract Poker {
                     }
                     players[player_count] = player_addr;
                     player_count += 1;
+
+                    if( player_count >= MAX_PLAYERS ) {
+                        break;
+                    }
                 }
             }
 
@@ -606,21 +583,19 @@ contract Poker {
 // ------------------------------------------------------------------
 // Limit Hodl'em Poker implementation
 
-    // Durstenfeld's version of Fisher-Yates shuffle
-    // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
     function shuffle_deck(uint256 seed, uint k)
         internal pure
         returns (bytes memory deck)
     {
-        require( k < 32 );
+        require( k < 16 );
         deck = new bytes(k);
         unchecked {
             uint bt = 0;
             uint sc = 0;
             while( sc < k ) {
-                uint j = seed % 52;
+                uint j = (seed&0xFFFF) % 52;
                 uint n = 1<<j;
-                seed >>= 8;
+                seed >>= 16;
                 if( bt & n != 0 ) {
                     continue;
                 }
@@ -632,15 +607,18 @@ contract Poker {
         return deck;
     }
 
+    // Durstenfeld's version of Fisher-Yates shuffle
+    // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
     function shuffle_players_inplace(uint256 seed, address[] memory players, uint players_count)
         internal pure
     {
+        require( players_count < 16 );
         unchecked {
             for( uint i = (players_count-1); i > 0; i-- )
             {
-                uint j = seed % i;
+                uint j = (seed&0xFFFF) % i;
                 (players[j], players[i]) = (players[i], players[j]);
-                seed >>= 8;
+                seed >>= 16;
             }
         }
     }
@@ -799,7 +777,7 @@ contract Poker {
         uint tableinfo_packed = t.tableinfo_packed;
         require( tableinfo_packed != 0 );
 
-        (TableInfo memory ti, bytes memory dealer_cards) = tableinfo_unpack(t.tableinfo_packed);                // Ensure game exists
+        (TableInfo memory ti, bytes memory dealer_cards) = tableinfo_unpack(tableinfo_packed);
 
         // Ensure correct game state
         require( ti.state_player == player_idx );
@@ -859,6 +837,8 @@ contract Poker {
             require( proof.score == 0 );
         }
 
+        uint256 table_pot = t.pot;
+
         // Subtract bet from balance, or force to fold if insufficient balance
         if( ti.bet_size != 0 )
         {
@@ -874,12 +854,11 @@ contract Poker {
             else {
                 g_balances[player.addr] = player_bal - bet_amount;
                 // Increase pot and bet multiple
-                t.pot += bet_amount;
+                table_pot += bet_amount;
+                t.pot = table_pot;
                 ti.state_bet = bet;
             }
         }
-
-        uint256 table_pot = t.pot;
 
         // Player folds
         if( 0 == bet )

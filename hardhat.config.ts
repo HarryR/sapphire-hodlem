@@ -7,6 +7,14 @@ import 'solidity-coverage'
 
 const env_private_key = process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [];
 
+const TEST_HDWALLET = {
+  mnemonic: "test test test test test test test test test test test junk",
+  path: "m/44'/60'/0'/0",
+  initialIndex: 0,
+  count: 20,
+  passphrase: "",
+};
+
 const config: HardhatUserConfig = {
   mocha: {
     timeout: 400000
@@ -39,13 +47,7 @@ const config: HardhatUserConfig = {
     sapphire_local: {
       url: "http://localhost:8545",
       //accounts: env_private_key,
-      accounts: {
-        mnemonic: "test test test test test test test test test test test junk",
-        path: "m/44'/60'/0'/0",
-        initialIndex: 0,
-        count: 20,
-        passphrase: "",
-      },
+      accounts: TEST_HDWALLET,
       chainId: 0x5afd,
     },
     // https://docs.oasis.io/dapp/sapphire/
@@ -56,7 +58,7 @@ const config: HardhatUserConfig = {
     },
     sapphire_testnet: {
       url: "https://testnet.sapphire.oasis.dev",
-      accounts: env_private_key,
+      accounts: TEST_HDWALLET,
       chainId: 0x5aff,
     }
   }

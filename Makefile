@@ -10,13 +10,19 @@ all:
 	@echo ...
 
 tsc:
-	pnpm tsc
+	$(DOCKER_RUN_DEV) pnpm tsc
+
+hardhat-compile:
+	$(DOCKER_RUN_DEV) pnpm hardhat compile
 
 hardhat-test:
-	pnpm hardhat test
+	$(DOCKER_RUN_DEV) pnpm hardhat test
 
 hardhat-coverage:
-	pnpm hardhat coverage
+	$(DOCKER_RUN_DEV) pnpm hardhat coverage
+
+pnpm-install:
+	$(DOCKER_RUN_DEV) pnpm install
 
 scores-tree: cache/scores/scores.root
 
@@ -36,12 +42,15 @@ cache:
 	mkdir cache
 
 cache/%.docker: Dockerfile.% cache
-	docker build -f $< -t "${REPO}/$*" .
-	docker image inspect "${REPO}/$*" > $@
+	if [ ! -f "$@" ]; then \
+		docker build -f $< -t "${REPO}/$*" . ; \
+		docker image inspect "${REPO}/$*" > $@ ; \
+	fi
 
 clean:
-	rm -rf artifacts cache node_modules typechain-types .bash_history .cache .local lib coverage coverage.json
+	rm -rf artifacts cache coverage lib node_modules typechain-types
+	rm -rf .cache .config .local .npm
+	rm -rf .bash_history .node_repl_history .ts_node_repl_history coverage.json pnpm-lock.yaml
 
-.PHONY:
 %-shell: cache/%.docker
 	$(DOCKER_RUN_DEV) "${REPO}/$*" /bin/bash
