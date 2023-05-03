@@ -32,6 +32,9 @@ cache/scores/scores.root: $(wildcard py/*.py)
 python:
 	$(PYTHON)
 
+py/genset.exe: py/genset.c
+	$(CC) -o $@ -Wall -Wextra -O3  -march=native $<
+
 SAPPHIRE_DEV_DOCKER=ghcr.io/oasisprotocol/sapphire-dev:local
 #SAPPHIRE_DEV_DOCKER=ghcr.io/oasisprotocol/sapphire-dev:latest
 

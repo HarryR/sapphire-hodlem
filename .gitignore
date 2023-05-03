@@ -11,6 +11,9 @@ cache
 .npm
 .node_repl_history
 .ts_node_repl_history
+.python_history
+.vscode
 typechain-types
 artifacts
 .bash_history
+*.exe
